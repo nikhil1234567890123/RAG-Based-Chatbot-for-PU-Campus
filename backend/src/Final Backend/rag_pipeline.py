@@ -1,11 +1,32 @@
 import os
+import sys
 import re
+
+# Limit PyTorch / BLAS / OpenMP threads to prevent OOM on low-RAM Windows systems
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import torch
+torch.set_num_threads(1)
+
+# Ensure UTF-8 output encoding for Windows terminal compatibility
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
 from llama_index.core import StorageContext, load_index_from_storage
+# pyrefly: ignore [missing-import]
 from llama_index.vector_stores.chroma import ChromaVectorStore
+# pyrefly: ignore [missing-import]
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 from groq import Groq
@@ -45,15 +66,22 @@ def init_llm():
     return Groq(api_key=api_key)
 
 
+import torch
+torch.set_num_threads(2)
+
 # ---------------------------
 # RAG COMPONENT INITIALIZERS
 # ---------------------------
 def init_embed_model():
-    return HuggingFaceEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+    return HuggingFaceEmbedding("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
 
 
 def init_reranker():
-    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    try:
+        return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device="cpu")
+    except Exception as e:
+        print(f"⚠️ Reranker skipped to conserve RAM: {e}")
+        return None
 
 
 def init_vector_store(persist_dir="./chroma_db", collection_name="rag-collection"):
@@ -94,27 +122,54 @@ print("✅ Pipeline initialized successfully.")
 # GROQ GENERATION FUNCTION
 # ---------------------------
 def groq_generate(llm, prompt):
+    model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip()
     try:
         response = llm.chat.completions.create(
-            model="llama3.1-8b-instant",
+            model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1
         )
-        return response.choices[0].message["content"]
+        msg = response.choices[0].message
+        return getattr(msg, 'content', None) or msg["content"]
 
     except Exception as e:
-        print("⚠️ GROQ error:", e)
+        print("⚠️ GROQ primary error:", e)
 
-        # fallback: try next API key
+        # fallback 1: try next API key
         print("🔄 Switching API Key...")
-        new_llm = init_llm()
+        try:
+            new_llm = init_llm()
+            response = new_llm.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1
+            )
+            msg = response.choices[0].message
+            return getattr(msg, 'content', None) or msg["content"]
+        except Exception as e2:
+            print("⚠️ GROQ fallback key error:", e2)
 
-        response = new_llm.chat.completions.create(
-            model="llama3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1
-        )
-        return response.choices[0].message["content"]
+            # fallback 2: try alternative Groq model names if primary model is unavailable
+            fallback_models = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"]
+            for fmodel in fallback_models:
+                try:
+                    print(f"🔄 Trying fallback model: {fmodel}")
+                    new_llm = init_llm()
+                    response = new_llm.chat.completions.create(
+                        model=fmodel,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1
+                    )
+                    msg = response.choices[0].message
+                    content = getattr(msg, 'content', None) or msg["content"]
+                    if content:
+                        return content
+                except Exception as fe:
+                    print(f"⚠️ Model {fmodel} failed:", fe)
+                    continue
+
+            raise e2
+
 
 
 # ---------------------------
@@ -324,4 +379,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(port=5000, host="0.0.0.0", debug=True)
+    app.run(port=5000, host="0.0.0.0", debug=False, use_reloader=False)

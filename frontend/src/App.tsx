@@ -12,7 +12,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+        <Route path="/chat" element={<ProtectedRoute allowGuest={true}><ChatPage /></ProtectedRoute>} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/complete-profile" element={<ProtectedRoute allowIncomplete={true}><CompleteProfile /></ProtectedRoute>} />
@@ -20,5 +20,6 @@ function App() {
     </Router>
   );
 }
+
 
 export default App;

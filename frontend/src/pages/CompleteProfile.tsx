@@ -5,6 +5,7 @@ import {
   FiHome, FiLayers, FiClock, FiStar 
 } from "react-icons/fi";
 import { supabase } from "../supabaseClient";
+import LoadingSpinner from "../components/LoadingSpinner";
 import "./register.css"; // Reuse the registration form's styles for consistency
 
 const CompleteProfile: React.FC = () => {
@@ -24,10 +25,21 @@ const CompleteProfile: React.FC = () => {
   });
 
   useEffect(() => {
+    let isMounted = true;
     const fetchProfileAndMetadata = async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
+        const timeoutPromise = new Promise<{ data: { user: null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { user: null } }), 3500)
+        );
+
+        const userRes = await Promise.race([
+          supabase.auth.getUser(),
+          timeoutPromise
+        ]) as any;
+
+        const user = userRes?.data?.user ?? null;
+
+        if (user && isMounted) {
           const metadata = user.user_metadata;
           const oauthName = metadata?.full_name || metadata?.name || "";
 
@@ -42,7 +54,7 @@ const CompleteProfile: React.FC = () => {
             console.error("Error retrieving existing profile:", error);
           }
 
-          if (profile) {
+          if (profile && isMounted) {
             // Profile exists -> user is editing
             setIsEditing(true);
             setFormData({
@@ -55,7 +67,7 @@ const CompleteProfile: React.FC = () => {
               hostel: profile.hostel || "",
               category: profile.category || "",
             });
-          } else {
+          } else if (isMounted) {
             // No profile yet -> pre-fill name from OAuth if available
             setIsEditing(false);
             setFormData(prev => ({
@@ -67,11 +79,15 @@ const CompleteProfile: React.FC = () => {
       } catch (err) {
         console.error("Unexpected error loading user/profile data:", err);
       } finally {
-        setInitialLoading(false);
+        if (isMounted) setInitialLoading(false);
       }
     };
 
     fetchProfileAndMetadata();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -129,20 +145,9 @@ const CompleteProfile: React.FC = () => {
   };
 
   if (initialLoading) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: '#0a0a0a',
-        color: '#fff',
-        fontSize: '1.2rem',
-      }}>
-        Loading profile data...
-      </div>
-    );
+    return <LoadingSpinner message="Loading Profile Credentials..." subtext="Retrieving your Panjab University student records" />;
   }
+
 
   return (
     <div className="register-container" style={{ position: 'relative' }}>

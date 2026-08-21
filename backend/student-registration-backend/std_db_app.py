@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+# pyrefly: ignore [missing-import]
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 
